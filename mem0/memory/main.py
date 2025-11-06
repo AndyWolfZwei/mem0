@@ -1469,19 +1469,23 @@ class AsyncMemory(MemoryBase):
             response = remove_code_blocks(response)
             if not response.strip():
                 new_retrieved_facts = []
+                new_retrieved_facts_type = []
             else:
                 try:
                     # First try direct JSON parsing
                     new_retrieved_facts = json.loads(response)["facts"]
+                    new_retrieved_facts_type = json.loads(response)["facts_type"]
                 except json.JSONDecodeError:
                     # Try extracting JSON from response using built-in function
                     extracted_json = extract_json(response)
                     new_retrieved_facts = json.loads(extracted_json)["facts"]
+                    new_retrieved_facts_type = json.loads(extracted_json)["facts_type"]
         except Exception as e:
             logger.error(f"Error in new_retrieved_facts: {e}")
             new_retrieved_facts = []
+            new_retrieved_facts_type = []
 
-        if not new_retrieved_facts:
+        if not new_retrieved_facts or (len(new_retrieved_facts_type) != len(new_retrieved_facts)):
             logger.debug("No new facts retrieved from input. Skipping memory update LLM call.")
 
         retrieved_old_memory = []
@@ -1524,8 +1528,9 @@ class AsyncMemory(MemoryBase):
             retrieved_old_memory[idx]["id"] = str(idx)
 
         if new_retrieved_facts:
+            new_retrieval_dict = [{"text": fact, "text_type": fact_type} for fact, fact_type in zip(new_retrieved_facts, new_retrieved_facts_type)]
             function_calling_prompt = get_update_memory_messages(
-                retrieved_old_memory, new_retrieved_facts, self.config.custom_update_memory_prompt
+                retrieved_old_memory, new_retrieval_dict, self.config.custom_update_memory_prompt
             )
             try:
                 response = await asyncio.to_thread(
@@ -1553,6 +1558,9 @@ class AsyncMemory(MemoryBase):
         try:
             memory_tasks = []
             for resp in new_memories_with_actions.get("memory", []):
+                if resp.get("event") == "NONE":
+                    continue
+                metadata["facts_type"] = resp.get("text_type", "Event")
                 logger.info(resp)
                 try:
                     action_text = resp.get("text")
@@ -1582,32 +1590,6 @@ class AsyncMemory(MemoryBase):
                     elif event_type == "DELETE":
                         task = asyncio.create_task(self._delete_memory(memory_id=temp_uuid_mapping[resp.get("id")]))
                         memory_tasks.append((task, resp, "DELETE", temp_uuid_mapping[resp.get("id")]))
-                    elif event_type == "NONE":
-                        # Even if content doesn't need updating, update session IDs if provided
-                        memory_id = temp_uuid_mapping.get(resp.get("id"))
-                        if memory_id and (metadata.get("agent_id") or metadata.get("run_id")):
-                            # Create async task to update only the session identifiers
-                            async def update_session_ids(mem_id, meta):
-                                existing_memory = await asyncio.to_thread(self.vector_store.get, vector_id=mem_id)
-                                updated_metadata = deepcopy(existing_memory.payload)
-                                if meta.get("agent_id"):
-                                    updated_metadata["agent_id"] = meta["agent_id"]
-                                if meta.get("run_id"):
-                                    updated_metadata["run_id"] = meta["run_id"]
-                                updated_metadata["updated_at"] = datetime.now(pytz.timezone("US/Pacific")).isoformat()
-
-                                await asyncio.to_thread(
-                                    self.vector_store.update,
-                                    vector_id=mem_id,
-                                    vector=None,  # Keep same embeddings
-                                    payload=updated_metadata,
-                                )
-                                logger.info(f"Updated session IDs for memory {mem_id} (async)")
-
-                            task = asyncio.create_task(update_session_ids(memory_id, metadata))
-                            memory_tasks.append((task, resp, "NONE", memory_id))
-                        else:
-                            logger.info("NOOP for Memory (async).")
                 except Exception as e:
                     logger.error(f"Error processing memory action (async): {resp}, Error: {e}")
 
@@ -1615,18 +1597,19 @@ class AsyncMemory(MemoryBase):
                 try:
                     result_id = await task
                     if event_type == "ADD":
-                        returned_memories.append({"id": result_id, "memory": resp.get("text"), "event": event_type})
+                        returned_memories.append({"id": result_id, "memory": resp.get("text"), "memory_type": resp.get("text_type"), "event": event_type})
                     elif event_type == "UPDATE":
                         returned_memories.append(
                             {
                                 "id": mem_id,
                                 "memory": resp.get("text"),
+                                "memory_type": resp.get("text_type"),
                                 "event": event_type,
                                 "previous_memory": resp.get("old_memory"),
                             }
                         )
                     elif event_type == "DELETE":
-                        returned_memories.append({"id": mem_id, "memory": resp.get("text"), "event": event_type})
+                        returned_memories.append({"id": mem_id, "memory": resp.get("text"), "memory_type": resp.get("text_type"), "event": event_type})
                 except Exception as e:
                     logger.error(f"Error awaiting memory task (async): {e}")
         except Exception as e:

@@ -440,6 +440,7 @@ def get_update_memory_messages(retrieved_old_memory_dict, response_content, cust
             {{
                 "id" : "<ID of the memory>",                # Use existing ID for updates/deletes, or new ID for additions
                 "text" : "<Content of the memory>",         # Content of the memory
+                "text_type" : "<Type of the memory>",       # Type of the memory
                 "event" : "<Operation to be performed>",    # Must be "ADD", "UPDATE", "DELETE", or "NONE"
                 "old_memory" : "<Old memory content>"       # Required only if the event is "UPDATE"
             }},
