@@ -1773,6 +1773,7 @@ class AsyncMemory(MemoryBase):
                 hash=mem.payload.get("hash"),
                 created_at=mem.payload.get("created_at"),
                 updated_at=mem.payload.get("updated_at"),
+                metadata={"facts_type": mem.payload.get('facts_type', "")},
             ).model_dump(exclude={"score"})
 
             for key in promoted_payload_keys:
